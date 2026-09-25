@@ -1,0 +1,56 @@
+trigger:
+- task: TerraformTask@5
+  inputs:
+    provider: 'azurerm'
+    command: 'destroy'
+  - main
+
+pool:
+  vmImage: 'ubuntu-latest'
+
+variables:
+  azureServiceConnection: 'Azure-FreeTrial-Conn'
+  resourceGroup: 'rg-tfstate-backend'
+  storageAccount: 'tfstatebackend09'
+  containerName: 'tfstate'
+  stateKey: 'terraform.tfstate'
+
+steps:
+  - script: |
+      sudo apt-get update && sudo apt-get install -y gnupg software-properties-common curl
+      curl -fsSL https://apt.releases.hashicorp.com/gpg | sudo apt-key add -
+      sudo apt-add-repository "deb [arch=amd64] https://apt.releases.hashicorp.com $(lsb_release -cs) main"
+      sudo apt-get update && sudo apt-get install -y terraform
+      terraform --version
+    displayName: 'Install Terraform CLI'
+
+  - task: AzureCLI@2
+    displayName: 'Terraform Init & Plan'
+    inputs:
+      azureSubscription: '$(azureServiceConnection)'
+      scriptType: 'bash'
+      scriptLocation: 'inlineScript'
+      addSpnToEnvironment: true
+      inlineScript: |
+        set -e
+        ACCOUNT_KEY=$(az storage account keys list --resource-group $(resourceGroup) --account-name $(storageAccount) --query '[0].value' -o tsv)
+        
+        terraform init \
+          -backend-config="resource_group_name=$(resourceGroup)" \
+          -backend-config="storage_account_name=$(storageAccount)" \
+          -backend-config="container_name=$(containerName)" \
+          -backend-config="key=$(stateKey)" \
+          -backend-config="access_key=$ACCOUNT_KEY"
+
+        terraform plan -out=tfplan
+
+  - task: AzureCLI@2
+    displayName: 'Terraform Apply'
+    inputs:
+      azureSubscription: '$(azureServiceConnection)'
+      scriptType: 'bash'
+      scriptLocation: 'inlineScript'
+      addSpnToEnvironment: true
+      inlineScript: |
+        set -e
+        terraform apply -auto-approve tfplan
